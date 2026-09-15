@@ -2,12 +2,26 @@
 	"info": {
 		"id": "en.batcave",
 		"name": "BatCave",
-		"version": 2,
+		"version": 3,
 		"url": "https://batcave.biz",
 		"contentRating": 0,
 		"languages": ["en"],
-		"minAppVersion": "0.7.1"
+		"minAppVersion": "0.9"
 	},
+	"listings": [
+		{
+			"id": "latest",
+			"name": "Newest Releases"
+		},
+		{
+			"id": "top-rated",
+			"name": "Top Rated"
+		},
+		{
+			"id": "just-added",
+			"name": "Just Added"
+		}
+	],
 	"config": {
 		"hidesFiltersWhileSearching": true
 	}

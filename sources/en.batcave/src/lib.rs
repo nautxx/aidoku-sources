@@ -1,7 +1,7 @@
 #![no_std]
 use aidoku::{
-	Chapter, DeepLinkHandler, DeepLinkResult, FilterValue, HashMap, ImageRequestProvider, Manga,
-	MangaPageResult, MangaStatus, Page, PageContent, Result, Source, WebLoginHandler,
+	Chapter, DeepLinkHandler, DeepLinkResult, FilterValue, ImageRequestProvider, Listing,
+	ListingProvider, Manga, MangaPageResult, MangaStatus, Page, PageContent, Result, Source,
 	alloc::{String, Vec, string::ToString, vec},
 	helpers::uri::encode_uri_component,
 	imports::net::Request,
@@ -12,17 +12,25 @@ mod helpers;
 mod home;
 mod models;
 
+use helpers::*;
 use models::*;
-
-use crate::helpers::BatCaveHtml;
 
 const BASE_URL: &str = "https://batcave.biz";
 const REFERER: &str = "https://batcave.biz/";
 const USER_AGENT: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) \
                           AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 \
                           Mobile/15E148 Safari/604.1";
-const VERIFY_KEY: &str = "verify";
 const TRUST_COOKIE_KEY: &str = "__guard_trust";
+
+const LATEST_LISTING: &str = "latest";
+const TOP_RATED_LISTING: &str = "top-rated";
+const JUST_ADDED_LISTING: &str = "just-added";
+// the same ids and names as the listings in res/source.json
+const LISTING_NAMES: [(&str, &str); 3] = [
+	(LATEST_LISTING, "Newest Releases"),
+	(TOP_RATED_LISTING, "Top Rated"),
+	(JUST_ADDED_LISTING, "Just Added"),
+];
 
 struct BatCave;
 
@@ -54,7 +62,7 @@ impl Source for BatCave {
 							filters_vec.push(format!("y[to]={}", to));
 						}
 					}
-					FilterValue::MultiSelect { included, .. } => {
+					FilterValue::MultiSelect { included, .. } if !included.is_empty() => {
 						filters_vec.push(format!("g={}", included.join(",")));
 					}
 					_ => {}
@@ -66,51 +74,11 @@ impl Source for BatCave {
 					filters_vec.join("/")
 				)
 			} else {
-				format!(
-					"{BASE_URL}/comix/{}",
-					if page > 1 {
-						format!("page/{page}/")
-					} else {
-						String::new()
-					}
-				)
+				comix_url(page)
 			}
 		};
 
-		let html = Request::get(&url)?.batcave_html()?;
-
-		let entries = html
-			.select("#dle-content > .readed")
-			.map(|elements| {
-				elements
-					.filter_map(|element| {
-						let link = element.select_first(".readed__title > a")?;
-						let url = link.attr("abs:href")?;
-						let key = url.strip_prefix(BASE_URL)?.to_string();
-						let cover = element.select_first("img")?.attr("abs:data-src");
-						let title = link.own_text()?;
-						Some(Manga {
-							key,
-							cover,
-							title,
-							url: Some(url),
-							..Default::default()
-						})
-					})
-					.collect::<Vec<Manga>>()
-			})
-			.unwrap_or_default();
-
-		let has_next_page = html
-			.select_first("div.pagination__pages")
-			.and_then(|el| el.children().next_back())
-			.map(|child| child.tag_name().as_deref() == Some("a"))
-			.unwrap_or_default();
-
-		Ok(MangaPageResult {
-			entries,
-			has_next_page,
-		})
+		Ok(parse_manga_list(&get_html(&url)?))
 	}
 
 	fn get_manga_update(
@@ -120,7 +88,7 @@ impl Source for BatCave {
 		needs_chapters: bool,
 	) -> Result<Manga> {
 		let url = format!("{BASE_URL}{}", manga.key);
-		let html = Request::get(&url)?.batcave_html()?;
+		let html = get_html(&url)?;
 
 		if needs_details {
 			manga.title = html
@@ -194,7 +162,7 @@ impl Source for BatCave {
 
 	fn get_page_list(&self, _manga: Manga, chapter: Chapter) -> Result<Vec<Page>> {
 		let url = format!("{BASE_URL}{}", chapter.key);
-		let html = Request::get(&url)?.batcave_html()?;
+		let html = get_html(&url)?;
 
 		let pages = html
 			.select("script")
@@ -238,9 +206,23 @@ impl Source for BatCave {
 	}
 }
 
-impl WebLoginHandler for BatCave {
-	fn handle_web_login(&self, key: String, cookies: HashMap<String, String>) -> Result<bool> {
-		Ok(key == VERIFY_KEY && cookies.contains_key(TRUST_COOKIE_KEY))
+impl ListingProvider for BatCave {
+	fn get_manga_list(&self, listing: Listing, page: i32) -> Result<MangaPageResult> {
+		match listing.id.as_str() {
+			LATEST_LISTING => {
+				let (entries, has_next_page) = parse_latest(&get_html(&latest_url(page))?);
+				Ok(MangaPageResult {
+					entries: entries.into_iter().map(|entry| entry.manga).collect(),
+					has_next_page,
+				})
+			}
+			TOP_RATED_LISTING => Ok(parse_manga_list(&post_html(
+				&comix_url(page),
+				SORT_BY_RATING,
+			)?)),
+			JUST_ADDED_LISTING => Ok(parse_manga_list(&get_html(&comix_url(page))?)),
+			_ => bail!("Unknown listing: {}", listing.id),
+		}
 	}
 }
 
@@ -289,7 +271,7 @@ impl DeepLinkHandler for BatCave {
 register_source!(
 	BatCave,
 	Home,
+	ListingProvider,
 	ImageRequestProvider,
-	DeepLinkHandler,
-	WebLoginHandler
+	DeepLinkHandler
 );
