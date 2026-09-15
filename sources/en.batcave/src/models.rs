@@ -47,7 +47,33 @@ pub fn parse_chapter(news_id: i32, id: i32, date: &str, title: &str, manga_title
 	}
 }
 
+/// The data a reader page embeds.
 #[derive(Deserialize)]
-pub struct PageList {
+pub struct ReaderData {
 	pub images: Vec<String>,
+	/// The url of the comic the chapter belongs to.
+	pub post_link: String,
+}
+
+/// The filter data the comic list embeds as `window.__XFILTER__`.
+#[derive(Deserialize)]
+pub struct SiteFilters {
+	pub filter_items: SiteFilterItems,
+}
+
+#[derive(Deserialize)]
+pub struct SiteFilterItems {
+	#[serde(rename = "p")]
+	pub publisher: SiteFilter,
+}
+
+#[derive(Deserialize)]
+pub struct SiteFilter {
+	pub values: Vec<SiteFilterOption>,
+}
+
+#[derive(Deserialize)]
+pub struct SiteFilterOption {
+	pub id: i32,
+	pub value: String,
 }

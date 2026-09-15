@@ -1,5 +1,23 @@
 [
 	{
+		"type": "sort",
+		"id": "sort",
+		"title": "Sort",
+		"canAscend": true,
+		"options": [
+			"Date",
+			"Date of Change",
+			"Rating",
+			"Read",
+			"Comments",
+			"Title"
+		],
+		"default": {
+			"index": 0,
+			"ascending": false
+		}
+	},
+	{
 		"id": "year_of_issue",
 		"title": "Year of Issue",
 		"type": "range",
@@ -117,5 +135,17 @@
 			"48",
 			"49"
 		]
+	},
+	{
+		"type": "text",
+		"id": "writer",
+		"title": "Writer",
+		"placeholder": "Writer"
+	},
+	{
+		"type": "text",
+		"id": "artist",
+		"title": "Artist",
+		"placeholder": "Artist"
 	}
 ]

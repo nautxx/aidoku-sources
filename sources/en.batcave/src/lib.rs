@@ -1,7 +1,8 @@
 #![no_std]
 use aidoku::{
-	Chapter, DeepLinkHandler, DeepLinkResult, FilterValue, ImageRequestProvider, Listing,
-	ListingProvider, Manga, MangaPageResult, MangaStatus, Page, PageContent, Result, Source,
+	Chapter, ContentRating, DeepLinkHandler, DeepLinkResult, DynamicFilters, Filter, FilterValue,
+	ImageRequestProvider, Listing, ListingProvider, Manga, MangaPageResult, MangaStatus,
+	MultiSelectFilter, Page, PageContent, Result, Source, Viewer,
 	alloc::{String, Vec, string::ToString, vec},
 	helpers::uri::encode_uri_component,
 	imports::net::Request,
@@ -32,6 +33,16 @@ const LISTING_NAMES: [(&str, &str); 3] = [
 	(JUST_ADDED_LISTING, "Just Added"),
 ];
 
+// the site's names for the sort options in res/filters.json, in the same order
+const SORT_OPTIONS: [&str; 6] = [
+	"date",
+	"editdate",
+	"rating",
+	"news_read",
+	"comm_num",
+	"title",
+];
+
 struct BatCave;
 
 impl Source for BatCave {
@@ -45,40 +56,60 @@ impl Source for BatCave {
 		page: i32,
 		filters: Vec<FilterValue>,
 	) -> Result<MangaPageResult> {
-		let url = if let Some(query) = query {
-			format!(
+		if let Some(query) = query {
+			let url = format!(
 				"{BASE_URL}/search/{}/page/{page}/",
 				encode_uri_component(query)
-			)
-		} else {
-			let mut filters_vec = Vec::<String>::new();
-			for filter in filters {
-				match filter {
-					FilterValue::Range { from, to, .. } => {
-						if let Some(from) = from {
-							filters_vec.push(format!("y[from]={}", from));
-						}
-						if let Some(to) = to {
-							filters_vec.push(format!("y[to]={}", to));
-						}
-					}
-					FilterValue::MultiSelect { included, .. } if !included.is_empty() => {
-						filters_vec.push(format!("g={}", included.join(",")));
-					}
-					_ => {}
-				}
-			}
-			if !filters_vec.is_empty() {
-				format!(
-					"{BASE_URL}/ComicList/{}/page/{page}/",
-					filters_vec.join("/")
-				)
-			} else {
-				comix_url(page)
-			}
-		};
+			);
+			return Ok(parse_manga_list(&get_html(&url)?));
+		}
 
-		Ok(parse_manga_list(&get_html(&url)?))
+		let mut filters_vec = Vec::<String>::new();
+		let mut sort = None;
+		for filter in filters {
+			match filter {
+				FilterValue::Range { from, to, .. } => {
+					if let Some(from) = from {
+						filters_vec.push(format!("y[from]={}", from));
+					}
+					if let Some(to) = to {
+						filters_vec.push(format!("y[to]={}", to));
+					}
+				}
+				FilterValue::MultiSelect { id, included, .. } if !included.is_empty() => {
+					let key = if id == "publisher" { "p" } else { "g" };
+					filters_vec.push(format!("{key}={}", included.join(",")));
+				}
+				FilterValue::Text { id, value } if !value.is_empty() => {
+					let key = if id == "artist" { "a" } else { "w" };
+					filters_vec.push(format!("{key}={}", encode_uri_component(value)));
+				}
+				FilterValue::Sort {
+					index, ascending, ..
+				} => sort = Some((index, ascending)),
+				_ => {}
+			}
+		}
+
+		// the site takes the sort under a different name for filtered lists
+		let (url, sort_list) = if filters_vec.is_empty() {
+			(comix_url(page), "cat_1")
+		} else {
+			let filters = filters_vec.join("/");
+			(
+				format!("{BASE_URL}/ComicList/{filters}/page/{page}/"),
+				"xfilter",
+			)
+		};
+		let html = match sort {
+			// newest first is the site's default, so only other sorts are sent
+			Some((index, ascending)) if index > 0 || ascending => {
+				let sort_by = SORT_OPTIONS.get(index as usize).unwrap_or(&"date");
+				post_html(&url, &sort_body(sort_by, ascending, sort_list))?
+			}
+			_ => get_html(&url)?,
+		};
+		Ok(parse_manga_list(&html))
 	}
 
 	fn get_manga_update(
@@ -120,6 +151,26 @@ impl Source for BatCave {
 					.collect::<Vec<String>>()
 			});
 
+			let has_tag = |name: &str| {
+				manga
+					.tags
+					.as_ref()
+					.is_some_and(|tags| tags.iter().any(|tag| tag.eq_ignore_ascii_case(name)))
+			};
+			let is_mature = has_tag("mature");
+			let is_manga = has_tag("manga");
+			manga.content_rating = if is_mature {
+				ContentRating::Suggestive
+			} else {
+				ContentRating::Safe
+			};
+			// comics read left to right, but manga may not, so those keep the app's default
+			manga.viewer = if is_manga {
+				Viewer::Unknown
+			} else {
+				Viewer::LeftToRight
+			};
+
 			let status_str = html
 				.select_first("ul > li:has(div:contains(Release type))")
 				.and_then(|x| x.text())
@@ -136,25 +187,16 @@ impl Source for BatCave {
 		}
 
 		if needs_chapters {
-			let script_data = html
-				.select_first(".page__chapters-list > script")
-				.and_then(|x| x.data())
-				.ok_or(error!("No script data"))?;
+			let chapter_list = parse_script_json::<ChapterList>(&html, "window.__DATA__")
+				.ok_or(error!("No chapter data"))?;
 
-			let json_str = script_data
-				.strip_prefix("window.__DATA__ = ")
-				.and_then(|x| x.strip_suffix(";"))
-				.unwrap_or_default();
-
-			let chapter_list = serde_json::from_str::<ChapterList>(json_str)?;
-
-			let chapters = chapter_list
-				.chapters
-				.into_iter()
-				.map(|chapter| chapter.into_chapter(chapter_list.news_id, &manga.title))
-				.collect::<Vec<Chapter>>();
-
-			manga.chapters = Some(chapters);
+			manga.chapters = Some(
+				chapter_list
+					.chapters
+					.into_iter()
+					.map(|chapter| chapter.into_chapter(chapter_list.news_id, &manga.title))
+					.collect(),
+			);
 		}
 
 		Ok(manga)
@@ -162,47 +204,24 @@ impl Source for BatCave {
 
 	fn get_page_list(&self, _manga: Manga, chapter: Chapter) -> Result<Vec<Page>> {
 		let url = format!("{BASE_URL}{}", chapter.key);
-		let html = get_html(&url)?;
+		let data = parse_script_json::<ReaderData>(&get_html(&url)?, "window.__DATA__")
+			.ok_or(error!("No page data"))?;
 
-		let pages = html
-			.select("script")
-			.map(|elements| {
-				elements
-					.filter_map(|element| {
-						let text = element.data()?;
-						if !text.starts_with("window.__DATA__") {
-							return None;
-						}
-
-						let page_json_str =
-							text.strip_prefix("window.__DATA__ = ")?.strip_suffix(";")?;
-
-						let page_list = serde_json::from_str::<PageList>(page_json_str).ok()?;
-
-						let pages = page_list
-							.images
-							.into_iter()
-							.map(|page_url| {
-								let url = if page_url.starts_with("/") {
-									format!("{BASE_URL}{}", page_url)
-								} else {
-									page_url
-								};
-								Page {
-									content: PageContent::url(url),
-									..Default::default()
-								}
-							})
-							.collect::<Vec<Page>>();
-
-						Some(pages)
-					})
-					.flatten()
-					.collect::<Vec<Page>>()
+		Ok(data
+			.images
+			.into_iter()
+			.map(|image| {
+				let url = if image.starts_with('/') {
+					format!("{BASE_URL}{image}")
+				} else {
+					image
+				};
+				Page {
+					content: PageContent::url(url),
+					..Default::default()
+				}
 			})
-			.unwrap_or_default();
-
-		Ok(pages)
+			.collect())
 	}
 }
 
@@ -224,10 +243,41 @@ fn get_listing_page(id: &str, page: i32) -> Result<MangaPageResult> {
 		}
 		TOP_RATED_LISTING => Ok(parse_manga_list(&post_html(
 			&comix_url(page),
-			SORT_BY_RATING,
+			&sort_body("rating", false, "cat_1"),
 		)?)),
 		JUST_ADDED_LISTING => Ok(parse_manga_list(&get_html(&comix_url(page))?)),
 		_ => bail!("Unknown listing: {id}"),
+	}
+}
+
+impl DynamicFilters for BatCave {
+	fn get_dynamic_filters(&self) -> Result<Vec<Filter>> {
+		// the site has about 1,800 publishers, so they come from its own filter data
+		// instead of filters.json, and search still works without them if that fails
+		let Some(site_filters) = get_html(&comix_url(1))
+			.ok()
+			.and_then(|html| parse_script_json::<SiteFilters>(&html, "window.__XFILTER__"))
+		else {
+			return Ok(Vec::new());
+		};
+
+		let (ids, options): (Vec<_>, Vec<_>) = site_filters
+			.filter_items
+			.publisher
+			.values
+			.into_iter()
+			.map(|publisher| (publisher.id.to_string().into(), publisher.value.into()))
+			.unzip();
+		Ok(vec![
+			MultiSelectFilter {
+				id: "publisher".into(),
+				title: Some("Publisher".into()),
+				options,
+				ids: Some(ids),
+				..Default::default()
+			}
+			.into(),
+		])
 	}
 }
 
@@ -250,6 +300,26 @@ impl DeepLinkHandler for BatCave {
 		let Some(key) = url.strip_prefix(BASE_URL) else {
 			return Ok(None);
 		};
+
+		// https://batcave.biz/reader/33408/238878
+		if let Some((news_id, id)) = key
+			.strip_prefix("/reader/")
+			.and_then(|ids| ids.split_once('/'))
+		{
+			let id = id.split(['/', '?', '#']).next().unwrap_or_default();
+			let (Ok(news_id), Ok(id)) = (news_id.parse::<i32>(), id.parse::<i32>()) else {
+				return Ok(None);
+			};
+			let key = format!("/reader/{news_id}/{id}");
+			// the reader page links back to its comic
+			let manga_key = parse_script_json::<ReaderData>(
+				&get_html(&format!("{BASE_URL}{key}"))?,
+				"window.__DATA__",
+			)
+			.and_then(|data| data.post_link.strip_prefix(BASE_URL).map(Into::into));
+			return Ok(manga_key.map(|manga_key| DeepLinkResult::Chapter { manga_key, key }));
+		}
+
 		let Some((id, slug)) = key.strip_prefix('/').and_then(|path| path.split_once('-')) else {
 			return Ok(None);
 		};
@@ -277,6 +347,7 @@ register_source!(
 	BatCave,
 	Home,
 	ListingProvider,
+	DynamicFilters,
 	ImageRequestProvider,
 	DeepLinkHandler
 );

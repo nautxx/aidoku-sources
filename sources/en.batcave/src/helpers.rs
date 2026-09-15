@@ -11,9 +11,7 @@ use aidoku::{
 	},
 	prelude::*,
 };
-
-pub const SORT_BY_RATING: &str = "dlenewssortby=rating&dledirection=desc\
-	&set_new_sort=dle_sort_cat_1&set_direction_sort=dle_direction_cat_1";
+use serde::de::DeserializeOwned;
 
 const COOKIE_KEY: &str = "cookie";
 const USER_AGENT_KEY: &str = "userAgent";
@@ -121,6 +119,32 @@ pub fn comix_url(page: i32) -> String {
 	} else {
 		format!("{BASE_URL}/comix/")
 	}
+}
+
+/// Builds the form body that sorts a list, where `list` is "cat_1" for the comic list
+/// and "xfilter" for filtered lists.
+pub fn sort_body(sort_by: &str, ascending: bool, list: &str) -> String {
+	let direction = if ascending { "asc" } else { "desc" };
+	format!(
+		"dlenewssortby={sort_by}&dledirection={direction}\
+		&set_new_sort=dle_sort_{list}&set_direction_sort=dle_direction_{list}"
+	)
+}
+
+/// Parses the object an inline script assigns, like `window.__DATA__ = {...};`.
+/// The trailing semicolon is optional, since the filter data script leaves it out.
+pub fn parse_script_json<T: DeserializeOwned>(html: &Document, variable: &str) -> Option<T> {
+	html.select("script")?.find_map(|script| {
+		let data = script.data()?;
+		let json = data
+			.trim()
+			.strip_prefix(variable)?
+			.trim_start()
+			.strip_prefix('=')?
+			.trim()
+			.trim_end_matches(';');
+		serde_json::from_str(json).ok()
+	})
 }
 
 pub fn latest_url(page: i32) -> String {
