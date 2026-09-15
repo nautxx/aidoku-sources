@@ -1,0 +1,66 @@
+[
+	{
+		"type": "select",
+		"id": "type",
+		"title": "Search type",
+		"options": ["All", "Originals", "Canvas"],
+		"ids": ["", "originals", "canvas"]
+	},
+	{
+		"type": "select",
+		"id": "genre",
+		"title": "Genre",
+		"isGenre": true,
+		"options": [
+			"All",
+			"Action",
+			"Comedy",
+			"Drama",
+			"Fantasy",
+			"Graphic Novel",
+			"Heartwarming",
+			"Historical",
+			"Horror",
+			"Informative",
+			"Mystery",
+			"Romance",
+			"Sci-fi",
+			"Slice of Life",
+			"Sports",
+			"Superhero",
+			"Supernatural",
+			"Thriller"
+		],
+		"ids": [
+			"",
+			"action",
+			"comedy",
+			"drama",
+			"fantasy",
+			"graphic_novel",
+			"heartwarming",
+			"historical",
+			"horror",
+			"tiptoon",
+			"mystery",
+			"romance",
+			"sf",
+			"slice_of_life",
+			"sports",
+			"super_hero",
+			"supernatural",
+			"thriller"
+		]
+	},
+	{
+		"type": "sort",
+		"id": "sort",
+		"title": "Genre sort",
+		"canAscend": false,
+		"options": ["Popularity", "Likes", "Date"],
+		"default": {
+			"index": 0,
+			"ascending": false
+		}
+	}
+]
