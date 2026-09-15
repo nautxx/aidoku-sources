@@ -208,21 +208,26 @@ impl Source for BatCave {
 
 impl ListingProvider for BatCave {
 	fn get_manga_list(&self, listing: Listing, page: i32) -> Result<MangaPageResult> {
-		match listing.id.as_str() {
-			LATEST_LISTING => {
-				let (entries, has_next_page) = parse_latest(&get_html(&latest_url(page))?);
-				Ok(MangaPageResult {
-					entries: entries.into_iter().map(|entry| entry.manga).collect(),
-					has_next_page,
-				})
-			}
-			TOP_RATED_LISTING => Ok(parse_manga_list(&post_html(
-				&comix_url(page),
-				SORT_BY_RATING,
-			)?)),
-			JUST_ADDED_LISTING => Ok(parse_manga_list(&get_html(&comix_url(page))?)),
-			_ => bail!("Unknown listing: {}", listing.id),
+		get_listing_page(&listing.id, page)
+	}
+}
+
+/// Returns a page of one of the listings in `LISTING_NAMES`.
+fn get_listing_page(id: &str, page: i32) -> Result<MangaPageResult> {
+	match id {
+		LATEST_LISTING => {
+			let (entries, has_next_page) = parse_latest(&get_html(&latest_url(page))?);
+			Ok(MangaPageResult {
+				entries: entries.into_iter().map(|entry| entry.manga).collect(),
+				has_next_page,
+			})
 		}
+		TOP_RATED_LISTING => Ok(parse_manga_list(&post_html(
+			&comix_url(page),
+			SORT_BY_RATING,
+		)?)),
+		JUST_ADDED_LISTING => Ok(parse_manga_list(&get_html(&comix_url(page))?)),
+		_ => bail!("Unknown listing: {id}"),
 	}
 }
 

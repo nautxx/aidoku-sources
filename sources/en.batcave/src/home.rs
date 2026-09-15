@@ -1,10 +1,10 @@
 use crate::{
 	BASE_URL, BatCave, JUST_ADDED_LISTING, LATEST_LISTING, LISTING_NAMES, TOP_RATED_LISTING,
-	helpers::*,
+	get_listing_page, helpers::*,
 };
 use aidoku::{
 	FilterItem, Home, HomeComponent, HomeComponentValue, HomeLayout, HomePartialResult, Listing,
-	ListingProvider, Manga, Result,
+	Manga, Result,
 	alloc::{String, Vec},
 	imports::{html::Element, std::send_partial_result},
 };
@@ -67,11 +67,13 @@ impl Home for BatCave {
 			("Top-rated comics", TOP_RATED_LISTING),
 			("Just added: fresh comics", JUST_ADDED_LISTING),
 		] {
-			let listing = listing(id);
-			if let Ok(result) = self.get_manga_list(listing.clone(), 1)
+			if let Ok(result) = get_listing_page(id, 1)
 				&& !result.entries.is_empty()
 			{
-				send(Some(title.into()), scroller(result.entries, Some(listing)));
+				send(
+					Some(title.into()),
+					scroller(result.entries, Some(listing(id))),
+				);
 			}
 		}
 
