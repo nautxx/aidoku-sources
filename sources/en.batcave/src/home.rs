@@ -1,173 +1,126 @@
-use crate::{BASE_URL, BatCave, BatCaveHtml};
-use aidoku::{
-	Home, HomeComponent, HomeLayout, HomePartialResult, Link, Manga, Result,
-	alloc::{Box, Vec, string::ToString},
-	imports::{html::Document, net::Request, std::send_partial_result},
-	prelude::*,
+use crate::{
+	BASE_URL, BatCave, JUST_ADDED_LISTING, LATEST_LISTING, LISTING_NAMES, TOP_RATED_LISTING,
+	helpers::*,
 };
-
-type ComponentBuilderFn = Box<dyn Fn(&Document) -> Option<HomeComponent>>;
+use aidoku::{
+	FilterItem, Home, HomeComponent, HomeComponentValue, HomeLayout, HomePartialResult, Listing,
+	ListingProvider, Manga, Result,
+	alloc::{String, Vec},
+	imports::{html::Element, std::send_partial_result},
+};
 
 impl Home for BatCave {
 	fn get_home(&self) -> Result<HomeLayout> {
-		fn get_home_hot_releases(html: &Document) -> Option<HomeComponent> {
-			let title = html
-				.select_first(".sect--hot > .sect__title")
-				.and_then(|x| x.text());
+		let html = get_html(BASE_URL)?;
 
-			let entries = html
-				.select("section.sect--hot > .sect__content > a.grid-item")
-				.map(|elements| {
-					elements
-						.filter_map(|element| {
-							let title = element
-								.select_first("div > p")
-								.and_then(|x| x.text())
-								.unwrap_or_default();
-
-							let cover = element
-								.select_first("img")
-								.and_then(|x| x.attr("abs:data-src"));
-
-							let url = element.attr("abs:href");
-							let key = url.clone()?.strip_prefix(BASE_URL)?.to_string();
-
-							Some(Manga {
-								key,
-								cover,
-								title,
-								url,
-								..Default::default()
-							})
+		if let Some(section) = html.select_first("section.sect--genres-home") {
+			let genres: Vec<FilterItem> = section
+				.select("a")
+				.map(|links| {
+					links
+						.filter_map(|link| {
+							// genre links look like "Horror (2971)", and the app matches the
+							// name against the genre filter
+							let text = link.text()?;
+							let name = text
+								.rsplit_once(" (")
+								.map_or(text.as_str(), |(name, _)| name);
+							Some(name.into())
 						})
-						.map(Into::into)
-						.collect::<Vec<Link>>()
+						.collect()
 				})
 				.unwrap_or_default();
-
-			if !entries.is_empty() {
-				Some(HomeComponent {
-					title,
-					value: aidoku::HomeComponentValue::Scroller {
-						entries,
-						listing: None,
-					},
-					..Default::default()
-				})
-			} else {
-				None
+			if !genres.is_empty() {
+				send(section_title(&section), HomeComponentValue::Filters(genres));
 			}
 		}
 
-		fn get_home_series_worth_starting(html: &Document) -> Option<HomeComponent> {
-			let section = html.select_first("section.sect--worth-starting")?;
-			let title = section.select_first(".sect__title").and_then(|x| x.text());
-
-			let entries = section
-				.select(".sect__content > a.grid-item")
-				.map(|elements| {
-					elements
-						.filter_map(|element| {
-							let title = element
-								.select_first(".poster__title")
-								.and_then(|x| x.text())
-								.unwrap_or_default();
-							let cover = element
-								.select_first("img")
-								.and_then(|x| x.attr("abs:data-src"));
-							let url = element.attr("abs:href");
-							let key = url.clone()?.strip_prefix(BASE_URL)?.to_string();
-
-							Some(Manga {
-								key,
-								cover,
-								title,
-								url,
-								..Default::default()
-							})
-						})
-						.map(Into::into)
-						.collect::<Vec<Link>>()
-				})
-				.unwrap_or_default();
-
-			if entries.is_empty() {
-				return None;
-			}
-
-			Some(HomeComponent {
-				title,
-				value: aidoku::HomeComponentValue::Scroller {
-					entries,
-					listing: None,
+		let (latest, _) = parse_latest(&html);
+		if !latest.is_empty() {
+			send(
+				html.select_first(".sect--latest .sect__title")
+					.and_then(|el| el.text()),
+				HomeComponentValue::MangaChapterList {
+					page_size: Some(4),
+					entries: latest,
+					listing: Some(listing(LATEST_LISTING)),
 				},
-				..Default::default()
-			})
+			);
 		}
 
-		fn get_side_block(index: i32) -> ComponentBuilderFn {
-			Box::new(move |html: &Document| {
-				let block = html.select_first(format!(".side-block:nth-of-type({})", index))?;
-				let title = block.select_first(".side-block__title")?.text();
-
-				let entries = block
-					.select(".side-block__content > a")
-					.map(|elements| {
-						elements
-							.filter_map(|element| {
-								let title = element
-									.select_first(".popular__title")
-									.and_then(|x| x.text())
-									.unwrap_or_default();
-
-								let cover = element
-									.select_first("img")
-									.and_then(|x| x.attr("abs:data-src"));
-
-								let url = element.attr("abs:href");
-								let key = url.clone()?.strip_prefix(BASE_URL)?.to_string();
-
-								Some(Manga {
-									key,
-									cover,
-									title,
-									url,
-									..Default::default()
-								})
-							})
-							.map(Into::into)
-							.collect::<Vec<Link>>()
-					})
+		// "hot new releases" and "series worth starting"
+		if let Some(sections) = html.select("section.sect--hot") {
+			for section in sections {
+				let entries: Vec<Manga> = section
+					.select(".sect__content > a.grid-item")
+					.map(|posters| posters.filter_map(parse_poster).collect())
 					.unwrap_or_default();
-
-				Some(HomeComponent {
-					title,
-					value: aidoku::HomeComponentValue::MangaList {
-						ranking: false,
-						entries,
-						listing: None,
-						page_size: None,
-					},
-					..Default::default()
-				})
-			})
+				if !entries.is_empty() {
+					send(section_title(&section), scroller(entries, None));
+				}
+			}
 		}
-		let html = Request::get(BASE_URL)?.batcave_html()?;
 
-		let component_fns: &[ComponentBuilderFn; 4] = &[
-			Box::new(get_home_hot_releases),
-			Box::new(get_home_series_worth_starting),
-			// get_side_block(1), "Free Steam games"
-			get_side_block(2),
-			get_side_block(3),
-		];
-
-		for component_fn in component_fns {
-			if let Some(component) = component_fn(&html) {
-				send_partial_result(&HomePartialResult::Component(component));
+		// the site's top-rated and just added blocks only have tiny thumbnails,
+		// so these rows use the first page of their listings instead
+		for (title, id) in [
+			("Top-rated comics", TOP_RATED_LISTING),
+			("Just added: fresh comics", JUST_ADDED_LISTING),
+		] {
+			let listing = listing(id);
+			if let Ok(result) = self.get_manga_list(listing.clone(), 1)
+				&& !result.entries.is_empty()
+			{
+				send(Some(title.into()), scroller(result.entries, Some(listing)));
 			}
 		}
 
 		Ok(HomeLayout::default())
 	}
+}
+
+fn send(title: Option<String>, value: HomeComponentValue) {
+	send_partial_result(&HomePartialResult::Component(HomeComponent {
+		title,
+		value,
+		..Default::default()
+	}));
+}
+
+fn scroller(entries: Vec<Manga>, listing: Option<Listing>) -> HomeComponentValue {
+	HomeComponentValue::Scroller {
+		entries: entries.into_iter().map(Into::into).collect(),
+		listing,
+	}
+}
+
+fn listing(id: &str) -> Listing {
+	let name = LISTING_NAMES
+		.iter()
+		.find(|(listing_id, _)| *listing_id == id)
+		.map_or(id, |(_, name)| name);
+	Listing {
+		id: id.into(),
+		name: name.into(),
+		..Default::default()
+	}
+}
+
+fn section_title(section: &Element) -> Option<String> {
+	section
+		.select_first(".sect__title")
+		.and_then(|el| el.text())
+}
+
+fn parse_poster(element: Element) -> Option<Manga> {
+	let url = element.attr("abs:href")?;
+	Some(Manga {
+		key: url.strip_prefix(BASE_URL)?.into(),
+		title: element.select_first(".poster__title")?.text()?,
+		cover: element
+			.select_first("img")
+			.and_then(|img| img.attr("abs:data-src")),
+		url: Some(url),
+		..Default::default()
+	})
 }
